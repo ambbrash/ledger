@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Ledger — Budget</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <span class="brand-name">Home Ledger</span>
+    <span class="brand-sub">household finances</span>
+  </div>
+  <div class="sidebar-month">
+    <div style="color:rgba(255,255,255,.5); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px;">Viewing month</div>
+    <select id="globalMonthPicker"></select>
+  </div>
+  <nav>
+    <a href="index.html" class="nav-link"><span class="nav-icon">◈</span> Dashboard</a>
+    <a href="transactions.html" class="nav-link"><span class="nav-icon">↕</span> Transactions</a>
+    <a href="budget.html" class="nav-link active"><span class="nav-icon">◫</span> Budget</a>
+    <a href="debts.html" class="nav-link"><span class="nav-icon">↓</span> Debts</a>
+    <a href="recurring.html" class="nav-link"><span class="nav-icon">↻</span> Recurring Bills</a>
+  </nav>
+  <div class="sidebar-footer">
+    <button id="exportBtn">⬇ Export backup</button>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="page-header">
+    <div><h1>Budget</h1><div class="page-sub">Monthly targets vs. actual spending</div></div>
+  </div>
+
+  <!-- Summary tiles -->
+  <div class="grid-3 section-gap" id="budgetTiles"></div>
+
+  <!-- Budget editor -->
+  <div class="grid-2 section-gap" style="align-items:start;">
+
+    <div class="card">
+      <h2>Set monthly budgets</h2>
+      <p style="font-size:.85rem; color:var(--ink-light); margin:0 0 14px; font-style:italic;">
+        These are your household targets. Enter 0 to track without a cap.
+      </p>
+      <div id="budgetEditor"></div>
+      <button class="btn primary mt-16" id="saveBudgetsBtn">Save budgets</button>
+    </div>
+
+    <div class="card">
+      <h2>This month vs. budget</h2>
+      <div id="budgetActual"></div>
+    </div>
+
+  </div>
+
+  <!-- Month-over-month table -->
+  <div class="card section-gap">
+    <h2>Category spending — last 6 months</h2>
+    <div style="overflow-x:auto;">
+      <table class="data-table" id="historyTable"></table>
+    </div>
+  </div>
+
+</main>
+
+<script src="js/data.js"></script>
+<script>
+const db = loadData();
+
+function buildMonthOptions() {
+  const picker = document.getElementById('globalMonthPicker');
+  const months = [];
+  const now = new Date();
+  for (let i=-3; i<=18; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    months.push(d.toISOString().slice(0,7));
+  }
+  db.transactions.forEach(t => { if (!months.includes(monthKey(t.date))) months.push(monthKey(t.date)); });
+  months.sort().reverse();
+  picker.innerHTML = months.map(m => `<option value="${m}" ${m===currentMonthKey()?'selected':''}>${monthLabel(m)}</option>`).join('');
+}
+function getViewMonth() { return document.getElementById('globalMonthPicker').value || currentMonthKey(); }
+document.getElementById('globalMonthPicker').addEventListener('change', renderAll);
+
+// ── Budget editor ──────────────────────────────────────────────
+function renderBudgetEditor() {
+  const ed = document.getElementById('budgetEditor');
+  ed.innerHTML = CATEGORIES.map(c => `
+    <div style="display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; margin-bottom:10px;">
+      <div style="display:flex; align-items:center; gap:8px; font-size:.9rem;">
+        <span>${c.icon}</span><span>${c.label}</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:4px;">
+        <span style="color:var(--ink-light); font-size:.85rem;">$</span>
+        <input type="number" class="budget-input" data-cat="${c.id}"
+          value="${db.budgets[c.id]||''}"
+          min="0" step="1"
+          style="width:90px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:var(--tan); font-family:var(--font-body); font-size:.9rem;"
+          placeholder="0">
+      </div>
+    </div>
+  `).join('');
+}
+
+document.getElementById('saveBudgetsBtn').addEventListener('click', () => {
+  document.querySelectorAll('.budget-input').forEach(inp => {
+    const v = parseFloat(inp.value);
+    db.budgets[inp.dataset.cat] = isNaN(v) || v <= 0 ? 0 : v;
+  });
+  saveData(db);
+  renderAll();
+  document.getElementById('saveBudgetsBtn').textContent = '✓ Saved';
+  setTimeout(() => document.getElementById('saveBudgetsBtn').textContent = 'Save budgets', 1500);
+});
+
+// ── Actual vs budget ───────────────────────────────────────────
+function renderActual(mk) {
+  const txs = getMonthTransactions(db, mk);
+  const bycat = spendByCategory(txs);
+  const cats = CATEGORIES.filter(c => (bycat[c.id]||0)>0 || (db.budgets[c.id]||0)>0);
+
+  const totalBudget = CATEGORIES.reduce((s,c) => s+(db.budgets[c.id]||0), 0);
+  const totalSpent = totalExpenses(txs);
+  const remaining = totalBudget - totalSpent;
+
+  // tiles
+  document.getElementById('budgetTiles').innerHTML = `
+    <div class="stat-tile">
+      <div class="label">Total budgeted</div>
+      <div class="value">${fmtMoney(totalBudget)}</div>
+      <div class="sub">across ${CATEGORIES.filter(c=>db.budgets[c.id]>0).length} categories</div>
+    </div>
+    <div class="stat-tile negative">
+      <div class="label">Spent so far</div>
+      <div class="value">${fmtMoney(totalSpent)}</div>
+      <div class="sub">${monthLabel(mk)}</div>
+    </div>
+    <div class="stat-tile ${remaining>=0?'positive':'negative'}">
+      <div class="label">${remaining>=0?'Remaining':'Over budget'}</div>
+      <div class="value">${fmtMoney(Math.abs(remaining))}</div>
+      <div class="sub">${remaining>=0?'left to spend':'exceeded target'}</div>
+    </div>
+  `;
+
+  if (cats.length === 0) {
+    document.getElementById('budgetActual').innerHTML = '<div class="empty-state">No data yet for this month.</div>';
+    return;
+  }
+
+  document.getElementById('budgetActual').innerHTML = cats.sort((a,b)=>(bycat[b.id]||0)-(bycat[a.id]||0)).map(c => {
+    const spent = bycat[c.id]||0;
+    const budget = db.budgets[c.id]||0;
+    const pct = budget>0 ? Math.min(110,(spent/budget)*100) : 0;
+    const over = budget>0 && spent>budget;
+    const warn = !over && budget>0 && pct>=80;
+    const left = budget - spent;
+    return `<div class="budget-row">
+      <div class="cat-label"><span>${c.icon}</span><span>${c.label}</span></div>
+      <div>
+        <div class="bar-track">
+          <div class="bar-fill ${over?'over':warn?'warn':''}" style="width:${pct}%;background:${c.color}"></div>
+        </div>
+        ${budget>0 ? `<div style="font-size:.68rem;color:var(--ink-light);margin-top:2px;">
+          ${over ? `<span style="color:var(--red);">$${(Math.abs(left)).toFixed(0)} over</span>` : `$${left.toFixed(0)} left`}
+        </div>` : ''}
+      </div>
+      <div class="amounts ${over?'over':''}">
+        <span class="spent">${fmtMoney(spent)}</span>
+        ${budget>0 ? `<span> / ${fmtMoney(budget)}</span>` : '<span class="text-muted"> unbudgeted</span>'}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── History table ──────────────────────────────────────────────
+function renderHistory() {
+  const now = new Date();
+  const months = [];
+  for (let i=5; i>=0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    months.push(d.toISOString().slice(0,7));
+  }
+
+  const usedCats = new Set();
+  months.forEach(mk => {
+    const bycat = spendByCategory(getMonthTransactions(db, mk));
+    Object.keys(bycat).forEach(c => usedCats.add(c));
+  });
+
+  const table = document.getElementById('historyTable');
+  if (usedCats.size === 0) {
+    table.innerHTML = '<tr><td class="empty-state">No spending history yet.</td></tr>';
+    return;
+  }
+
+  const usedCatList = CATEGORIES.filter(c => usedCats.has(c.id));
+
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Category</th>
+        ${months.map(mk => `<th class="text-right" style="white-space:nowrap;">${monthLabel(mk).split(' ')[0].slice(0,3)} ${monthLabel(mk).split(' ')[1]}</th>`).join('')}
+      </tr>
+    </thead>
+    <tbody>
+      ${usedCatList.map(c => {
+        const cells = months.map(mk => {
+          const bycat = spendByCategory(getMonthTransactions(db, mk));
+          const v = bycat[c.id]||0;
+          return `<td class="text-right" style="color:${v>0?'var(--ink)':'var(--ink-light)'};">${v>0?fmtMoney(v):'—'}</td>`;
+        }).join('');
+        return `<tr>
+          <td><span style="display:flex;align-items:center;gap:6px;"><span>${c.icon}</span><span>${c.label}</span></span></td>
+          ${cells}
+        </tr>`;
+      }).join('')}
+      <tr style="font-weight:600; border-top: 2px solid var(--border);">
+        <td>Total</td>
+        ${months.map(mk => {
+          const total = totalExpenses(getMonthTransactions(db, mk));
+          return `<td class="text-right">${total>0?fmtMoney(total):'—'}</td>`;
+        }).join('')}
+      </tr>
+    </tbody>
+  `;
+}
+
+document.getElementById('exportBtn').addEventListener('click', () => exportData(db));
+
+function renderAll() {
+  const mk = getViewMonth();
+  renderBudgetEditor();
+  renderActual(mk);
+  renderHistory();
+}
+
+buildMonthOptions();
+renderAll();
+</script>
+</body>
+</html>

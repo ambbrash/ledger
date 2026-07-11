@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Ledger — Dashboard</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ── Sidebar ─────────────────────────────────────────────── -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <span class="brand-name">Home Ledger</span>
+    <span class="brand-sub">household finances</span>
+  </div>
+  <div class="sidebar-month">
+    <div style="color:rgba(255,255,255,.5); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px;">Viewing month</div>
+    <select id="globalMonthPicker"></select>
+  </div>
+  <nav>
+    <a href="index.html" class="nav-link active"><span class="nav-icon">◈</span> Dashboard</a>
+    <a href="transactions.html" class="nav-link"><span class="nav-icon">↕</span> Transactions</a>
+    <a href="budget.html" class="nav-link"><span class="nav-icon">◫</span> Budget</a>
+    <a href="debts.html" class="nav-link"><span class="nav-icon">↓</span> Debts</a>
+    <a href="recurring.html" class="nav-link"><span class="nav-icon">↻</span> Recurring Bills</a>
+  </nav>
+  <div class="sidebar-footer">
+    <button id="exportBtn">⬇ Export backup</button>
+    <button id="importBtn">⬆ Import backup</button>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+  </div>
+</aside>
+
+<!-- ── Main ────────────────────────────────────────────────── -->
+<main class="main">
+
+  <div class="page-header">
+    <div>
+      <h1 id="dashTitle">Dashboard</h1>
+      <div class="page-sub" id="dashSub"></div>
+    </div>
+    <div class="flex gap-8 flex-wrap">
+      <a href="transactions.html#new" class="btn primary">+ Add transaction</a>
+    </div>
+  </div>
+
+  <!-- Stat tiles -->
+  <div class="grid-4 section-gap" id="statTiles"></div>
+
+  <!-- Row: spending chart + upcoming bills -->
+  <div class="grid-2 section-gap">
+    <div class="card">
+      <h2>Spending by category</h2>
+      <div style="display:flex; gap:20px; align-items:center; flex-wrap:wrap;">
+        <div class="pie-wrap">
+          <canvas id="pieChart" width="180" height="180"></canvas>
+        </div>
+        <div class="pie-legend" id="pieLegend"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Upcoming bills <span class="card-count" id="upcomingCount">0</span></h2>
+      <div id="upcomingBills"></div>
+    </div>
+  </div>
+
+  <!-- Budget overview -->
+  <div class="card section-gap">
+    <div class="flex-between" style="margin-bottom:14px;">
+      <h2 style="margin:0;">Budget vs. actual</h2>
+      <a href="budget.html" class="btn sm">Edit budgets →</a>
+    </div>
+    <div id="budgetOverview"></div>
+  </div>
+
+  <!-- Row: income + debt summary -->
+  <div class="grid-2 section-gap">
+    <div class="card">
+      <h2>Income this month</h2>
+      <div id="incomeBreakdown"></div>
+    </div>
+    <div class="card">
+      <h2>Debt snapshot</h2>
+      <div id="debtSnapshot"></div>
+      <a href="debts.html" class="btn sm mt-8">Manage debts →</a>
+    </div>
+  </div>
+
+  <!-- Recent transactions -->
+  <div class="card section-gap">
+    <div class="flex-between" style="margin-bottom:14px;">
+      <h2 style="margin:0;">Recent transactions</h2>
+      <a href="transactions.html" class="btn sm">View all →</a>
+    </div>
+    <div id="recentTx"></div>
+  </div>
+
+</main>
+
+<script src="js/data.js"></script>
+<script>
+const db = loadData();
+
+// ── Month picker ───────────────────────────────────────────────
+function buildMonthOptions() {
+  const picker = document.getElementById('globalMonthPicker');
+  // Generate last 18 months + next 3
+  const months = [];
+  const now = new Date();
+  for (let i = -3; i <= 18; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(d.toISOString().slice(0,7));
+  }
+  // also include any months that have data
+  db.transactions.forEach(t => { if (!months.includes(monthKey(t.date))) months.push(monthKey(t.date)); });
+  db.income.forEach(i => { if (!months.includes(monthKey(i.date))) months.push(monthKey(i.date)); });
+  months.sort().reverse();
+  picker.innerHTML = months.map(m => `<option value="${m}" ${m===currentMonthKey()?'selected':''}>${monthLabel(m)}</option>`).join('');
+}
+
+function getViewMonth() {
+  return document.getElementById('globalMonthPicker').value || currentMonthKey();
+}
+
+document.getElementById('globalMonthPicker').addEventListener('change', renderAll);
+
+// ── Stat tiles ─────────────────────────────────────────────────
+function renderStats(mk) {
+  const txs = getMonthTransactions(db, mk);
+  const inc = getMonthIncome(db, mk);
+  const totalInc = totalIncome(inc);
+  const totalExp = totalExpenses(txs);
+  const net = totalInc - totalExp;
+  const totalDebt = db.debts.reduce((s,d) => s + d.balance, 0);
+
+  document.getElementById('dashTitle').textContent = monthLabel(mk);
+  document.getElementById('dashSub').textContent = 'Monthly overview';
+
+  document.getElementById('statTiles').innerHTML = `
+    <div class="stat-tile ${totalInc>0?'positive':''}">
+      <div class="label">Income</div>
+      <div class="value">${fmtMoney(totalInc)}</div>
+      <div class="sub">${inc.length} source${inc.length!==1?'s':''}</div>
+    </div>
+    <div class="stat-tile negative">
+      <div class="label">Expenses</div>
+      <div class="value">${fmtMoney(totalExp)}</div>
+      <div class="sub">${txs.filter(t=>t.type==='expense').length} transactions</div>
+    </div>
+    <div class="stat-tile ${net>=0?'positive':'negative'}">
+      <div class="label">Net</div>
+      <div class="value">${fmtMoneyRaw(net)}</div>
+      <div class="sub">${net>=0?'surplus':'shortfall'}</div>
+    </div>
+    <div class="stat-tile warning">
+      <div class="label">Total debt</div>
+      <div class="value">${fmtMoney(totalDebt)}</div>
+      <div class="sub">${db.debts.filter(d=>d.balance>0).length} accounts</div>
+    </div>
+  `;
+}
+
+// ── Pie chart ──────────────────────────────────────────────────
+function renderPie(mk) {
+  const txs = getMonthTransactions(db, mk);
+  const bycat = spendByCategory(txs);
+  const cats = CATEGORIES.filter(c => (bycat[c.id]||0) > 0).sort((a,b)=>(bycat[b.id]||0)-(bycat[a.id]||0));
+
+  const canvas = document.getElementById('pieChart');
+  const ctx = canvas.getContext('2d');
+  const total = Object.values(bycat).reduce((s,v)=>s+v,0);
+
+  ctx.clearRect(0,0,180,180);
+
+  if (cats.length === 0) {
+    ctx.fillStyle = '#D0C4B4';
+    ctx.beginPath(); ctx.arc(90,90,80,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#F2EBE0';
+    ctx.beginPath(); ctx.arc(90,90,45,0,Math.PI*2); ctx.fill();
+    document.getElementById('pieLegend').innerHTML = '<span style="color:var(--ink-light);font-style:italic;font-size:.82rem;">No spending this month</span>';
+    return;
+  }
+
+  let start = -Math.PI/2;
+  cats.forEach(c => {
+    const pct = (bycat[c.id]||0) / total;
+    const end = start + pct * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(90,90);
+    ctx.arc(90,90,85,start,end);
+    ctx.closePath();
+    ctx.fillStyle = c.color;
+    ctx.fill();
+    start = end;
+  });
+  // donut hole
+  ctx.beginPath(); ctx.arc(90,90,44,0,Math.PI*2);
+  ctx.fillStyle = '#F8F3EC'; ctx.fill();
+
+  // total in center
+  ctx.fillStyle = '#2A2520';
+  ctx.font = 'bold 13px serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(fmtMoney(total), 90, 94);
+
+  document.getElementById('pieLegend').innerHTML = cats.slice(0,10).map(c =>
+    `<div class="pie-legend-item">
+      <span class="pie-legend-dot" style="background:${c.color}"></span>
+      <span>${c.label}</span>
+      <span class="text-muted" style="margin-left:auto;padding-left:8px;">${fmtMoney(bycat[c.id]||0)}</span>
+    </div>`
+  ).join('');
+}
+
+// ── Upcoming bills ─────────────────────────────────────────────
+function renderUpcoming() {
+  const today = new Date();
+  const dom = today.getDate();
+  const active = db.recurring.filter(r => r.active !== false);
+  const sorted = active.map(r => {
+    let daysUntil = r.dueDay - dom;
+    if (daysUntil < 0) daysUntil += 31;
+    return { ...r, daysUntil };
+  }).sort((a,b) => a.daysUntil - b.daysUntil);
+
+  document.getElementById('upcomingCount').textContent = active.length;
+
+  if (sorted.length === 0) {
+    document.getElementById('upcomingBills').innerHTML = '<div class="empty-state">No recurring bills set up yet.<br><a href="recurring.html" style="color:var(--ink-light);">Add them →</a></div>';
+    return;
+  }
+
+  document.getElementById('upcomingBills').innerHTML = sorted.slice(0,7).map(r => {
+    const cls = r.daysUntil === 0 ? 'overdue' : r.daysUntil <= 5 ? 'soon' : 'ok';
+    const label = r.daysUntil === 0 ? 'Due today' : r.daysUntil === 1 ? 'Tomorrow' : `${r.daysUntil}d`;
+    return `<div class="recurring-item">
+      <div>
+        <div class="ri-name">${escHtml(r.label)}</div>
+        <div class="ri-meta">Day ${r.dueDay} · ${fmtMoney(r.amount)}</div>
+      </div>
+      <span class="due-badge ${cls}">${label}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Budget overview ────────────────────────────────────────────
+function renderBudgetOverview(mk) {
+  const txs = getMonthTransactions(db, mk);
+  const bycat = spendByCategory(txs);
+  const budgeted = CATEGORIES.filter(c => (db.budgets[c.id]||0) > 0 || (bycat[c.id]||0) > 0);
+
+  if (budgeted.length === 0) {
+    document.getElementById('budgetOverview').innerHTML = '<div class="empty-state">No budgets set yet. <a href="budget.html" style="color:var(--ink-light);">Set them up →</a></div>';
+    return;
+  }
+
+  document.getElementById('budgetOverview').innerHTML = budgeted.map(c => {
+    const spent = bycat[c.id] || 0;
+    const budget = db.budgets[c.id] || 0;
+    const pct = budget > 0 ? Math.min(110, (spent/budget)*100) : 0;
+    const over = budget > 0 && spent > budget;
+    const warn = budget > 0 && pct >= 80 && !over;
+    const remaining = budget - spent;
+
+    return `<div class="budget-row">
+      <div class="cat-label">
+        <span class="cat-icon">${c.icon}</span>
+        <span>${c.label}</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill ${over?'over':warn?'warn':''}" style="width:${pct}%;background:${c.color}"></div>
+      </div>
+      <div class="amounts ${over?'over':''}">
+        <span class="spent">${fmtMoney(spent)}</span>
+        ${budget > 0
+          ? `<span> / ${fmtMoney(budget)}</span>`
+          : '<span class="text-muted"> (no budget)</span>'
+        }
+        ${over ? `<br><span style="color:var(--red);font-size:.7rem;">+${fmtMoney(Math.abs(remaining))} over</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Income breakdown ───────────────────────────────────────────
+function renderIncome(mk) {
+  const inc = getMonthIncome(db, mk);
+  const el = document.getElementById('incomeBreakdown');
+  if (inc.length === 0) {
+    el.innerHTML = '<div class="empty-state">No income logged this month.</div>';
+    return;
+  }
+  const bySource = {};
+  inc.forEach(i => { bySource[i.source] = (bySource[i.source]||0) + i.amount; });
+  const total = totalIncome(inc);
+  el.innerHTML = `
+    ${Object.entries(bySource).map(([src,amt]) => {
+      const label = INCOME_SOURCES.find(s=>s.id===src)?.label || src;
+      const pct = Math.round((amt/total)*100);
+      return `<div style="margin-bottom:10px;">
+        <div class="flex-between text-sm mb-1">
+          <span>${label}</span><span class="bold">${fmtMoney(amt)}</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:${pct}%;background:var(--green)"></div>
+        </div>
+      </div>`;
+    }).join('')}
+    <div class="flex-between bold mt-8" style="padding-top:8px;border-top:1px solid var(--tan-dark);">
+      <span>Total</span><span class="green">${fmtMoney(total)}</span>
+    </div>
+  `;
+}
+
+// ── Debt snapshot ──────────────────────────────────────────────
+function renderDebtSnapshot() {
+  const debts = db.debts.filter(d => d.balance > 0);
+  const el = document.getElementById('debtSnapshot');
+  if (debts.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="padding:16px 0;">No debt balances entered yet.</div>';
+    return;
+  }
+  const total = debts.reduce((s,d)=>s+d.balance,0);
+  const totalLimit = debts.reduce((s,d)=>s+(d.limit||0),0);
+  const utilPct = totalLimit > 0 ? Math.round((total/totalLimit)*100) : null;
+  el.innerHTML = `
+    <div class="flex-between text-sm mb-1">
+      <span>${debts.length} accounts with balances</span>
+      <span class="bold red">${fmtMoney(total)}</span>
+    </div>
+    <div class="bar-track" style="margin-bottom:12px;">
+      <div class="bar-fill over" style="width:${Math.min(100,utilPct||0)}%;background:var(--red)"></div>
+    </div>
+    ${utilPct!==null ? `<div class="text-xs text-muted mb-8">${utilPct}% credit utilization</div>` : ''}
+    ${debts.slice(0,4).map(d => `
+      <div class="flex-between text-sm" style="padding:4px 0;">
+        <span>${escHtml(d.label)}</span>
+        <span class="bold">${fmtMoney(d.balance)}</span>
+      </div>
+    `).join('')}
+    ${debts.length > 4 ? `<div class="text-xs text-muted mt-4">+${debts.length-4} more</div>` : ''}
+  `;
+}
+
+// ── Recent transactions ────────────────────────────────────────
+function renderRecent(mk) {
+  const txs = [...getMonthTransactions(db, mk), ...getMonthIncome(db, mk).map(i=>({...i,type:'income',category:'income'}))]
+    .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
+  const el = document.getElementById('recentTx');
+
+  if (txs.length === 0) {
+    el.innerHTML = '<div class="empty-state">No transactions this month yet.</div>';
+    return;
+  }
+
+  el.innerHTML = `<table class="data-table">
+    <thead><tr>
+      <th>Date</th><th>Note</th><th>Category</th><th class="text-right">Amount</th>
+    </tr></thead>
+    <tbody>
+    ${txs.map(t => {
+      const cat = t.type==='income'
+        ? { label:'Income', color:'var(--green)', icon:'↑' }
+        : categoryById(t.category);
+      const isIncome = t.type==='income';
+      return `<tr>
+        <td class="text-muted">${fmtDate(t.date)}</td>
+        <td>${escHtml(t.note||t.source||'—')}</td>
+        <td><span class="cat-chip" style="background:${cat.color}">${cat.icon} ${cat.label}</span></td>
+        <td class="text-right ${isIncome?'amount-income':'amount-expense'}">${isIncome?'+':'−'}${fmtMoney(t.amount)}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+}
+function escHtml(s) {
+  const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML;
+}
+
+// ── Export / import ────────────────────────────────────────────
+document.getElementById('exportBtn').addEventListener('click', () => exportData(db));
+document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
+document.getElementById('importFile').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => {
+    try {
+      const imported = JSON.parse(ev.target.result);
+      Object.assign(db, imported);
+      saveData(db);
+      renderAll();
+    } catch { alert('Could not read backup file.'); }
+  };
+  r.readAsText(f);
+  e.target.value = '';
+});
+
+// ── Main render ────────────────────────────────────────────────
+function renderAll() {
+  const mk = getViewMonth();
+  renderStats(mk);
+  renderPie(mk);
+  renderUpcoming();
+  renderBudgetOverview(mk);
+  renderIncome(mk);
+  renderDebtSnapshot();
+  renderRecent(mk);
+}
+
+buildMonthOptions();
+renderAll();
+</script>
+</body>
+</html>

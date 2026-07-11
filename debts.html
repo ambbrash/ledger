@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Ledger — Debts</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <span class="brand-name">Home Ledger</span>
+    <span class="brand-sub">household finances</span>
+  </div>
+  <div class="sidebar-month">
+    <div style="color:rgba(255,255,255,.5); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px;">Viewing month</div>
+    <select id="globalMonthPicker"></select>
+  </div>
+  <nav>
+    <a href="index.html" class="nav-link"><span class="nav-icon">◈</span> Dashboard</a>
+    <a href="transactions.html" class="nav-link"><span class="nav-icon">↕</span> Transactions</a>
+    <a href="budget.html" class="nav-link"><span class="nav-icon">◫</span> Budget</a>
+    <a href="debts.html" class="nav-link active"><span class="nav-icon">↓</span> Debts</a>
+    <a href="recurring.html" class="nav-link"><span class="nav-icon">↻</span> Recurring Bills</a>
+  </nav>
+  <div class="sidebar-footer">
+    <button id="exportBtn">⬇ Export backup</button>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="page-header">
+    <div><h1>Debt Tracker</h1><div class="page-sub">10 accounts — every dollar counts</div></div>
+    <button class="btn primary" id="addDebtBtn">+ Add account</button>
+  </div>
+
+  <!-- Summary tiles -->
+  <div class="grid-3 section-gap" id="debtTiles"></div>
+
+  <!-- Progress bar — total payoff -->
+  <div class="card section-gap" id="totalProgressCard"></div>
+
+  <!-- Strategy picker -->
+  <div class="card section-gap">
+    <div class="flex-between flex-wrap gap-8">
+      <h2 style="margin:0;">Payoff strategy</h2>
+      <div class="inner-tabs" style="margin:0; border:none;">
+        <button class="inner-tab active" id="tabSnowball">❄ Snowball</button>
+        <button class="inner-tab" id="tabAvalanche">🔥 Avalanche</button>
+      </div>
+    </div>
+    <p class="text-sm text-muted italic" id="strategyDesc" style="margin:8px 0 0;"></p>
+    <div id="strategyList" style="margin-top:14px;"></div>
+    <div style="margin-top:14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <label class="text-sm">Extra monthly payment:</label>
+      <div style="display:flex; align-items:center; gap:4px;">
+        <span style="color:var(--ink-light);">$</span>
+        <input type="number" id="extraPayment" value="0" min="0" step="10"
+          style="width:90px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--tan);font-family:var(--font-body);">
+      </div>
+      <button class="btn sm" id="calcPayoffBtn">Calculate payoff</button>
+    </div>
+    <div id="payoffEstimate" style="margin-top:12px;"></div>
+  </div>
+
+  <!-- Debt cards -->
+  <div class="section-title">All accounts</div>
+  <div class="grid-2" id="debtGrid" style="align-items:start;"></div>
+
+</main>
+
+<!-- Add / Edit debt modal -->
+<div class="modal-overlay" id="debtModal">
+  <div class="modal">
+    <h2 id="debtModalTitle">Add Debt Account</h2>
+    <input type="hidden" id="debtId">
+    <div class="form-grid">
+      <div class="field" style="grid-column:1/-1;">
+        <label>Account name</label>
+        <input type="text" id="dLabel" placeholder="e.g. Chase Sapphire, Capital One">
+      </div>
+      <div class="field">
+        <label>Current balance owed ($)</label>
+        <input type="number" id="dBalance" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="field">
+        <label>Credit limit ($) <span style="text-transform:none;letter-spacing:0;font-style:italic;">(if card)</span></label>
+        <input type="number" id="dLimit" min="0" step="1" placeholder="0">
+      </div>
+      <div class="field">
+        <label>Min payment ($/mo)</label>
+        <input type="number" id="dMin" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="field">
+        <label>APR (%)</label>
+        <input type="number" id="dApr" min="0" step="0.1" placeholder="e.g. 24.99">
+      </div>
+      <div class="field">
+        <label>Payment due day</label>
+        <input type="number" id="dDueDay" min="1" max="31" placeholder="e.g. 15">
+      </div>
+      <div class="field">
+        <label>Color</label>
+        <input type="color" id="dColor" value="#5C8A6E" style="height:38px;">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn danger" id="debtDeleteBtn" style="display:none;">Delete</button>
+      <button class="btn" id="debtCancelBtn">Cancel</button>
+      <button class="btn primary" id="debtSaveBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script>
+const db = loadData();
+let activeStrategy = 'snowball';
+let editingDebtId = null;
+
+function buildMonthOptions() {
+  const picker = document.getElementById('globalMonthPicker');
+  const now = new Date();
+  const months = [];
+  for (let i=-3; i<=3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    months.push(d.toISOString().slice(0,7));
+  }
+  picker.innerHTML = months.map(m=>`<option value="${m}" ${m===currentMonthKey()?'selected':''}>${monthLabel(m)}</option>`).join('');
+}
+
+// ── Stat tiles ─────────────────────────────────────────────────
+function renderTiles() {
+  const debts = db.debts;
+  const total = debts.reduce((s,d)=>s+d.balance,0);
+  const totalLimit = debts.reduce((s,d)=>s+(d.limit||0),0);
+  const totalMin = debts.reduce((s,d)=>s+(d.minPayment||0),0);
+  const util = totalLimit>0 ? Math.round((total/totalLimit)*100) : null;
+
+  document.getElementById('debtTiles').innerHTML = `
+    <div class="stat-tile negative">
+      <div class="label">Total debt</div>
+      <div class="value">${fmtMoney(total)}</div>
+      <div class="sub">${debts.filter(d=>d.balance>0).length} of ${debts.length} accounts with balances</div>
+    </div>
+    <div class="stat-tile warning">
+      <div class="label">Min payments / mo</div>
+      <div class="value">${fmtMoney(totalMin)}</div>
+      <div class="sub">just to tread water</div>
+    </div>
+    <div class="stat-tile ${util!==null && util>30?'negative':''}">
+      <div class="label">Credit utilization</div>
+      <div class="value">${util!==null ? util+'%' : '—'}</div>
+      <div class="sub">${util!==null ? (util<=10?'Excellent':util<=30?'Good':util<=50?'Fair':'High — impacts credit score') : 'Enter limits to calculate'}</div>
+    </div>
+  `;
+}
+
+// ── Total progress ─────────────────────────────────────────────
+function renderTotalProgress() {
+  const debts = db.debts;
+  const totalBalance = debts.reduce((s,d)=>s+d.balance,0);
+  const totalLimit = debts.reduce((s,d)=>s+(d.limit||0),0);
+  const paid = totalLimit - totalBalance;
+  const pct = totalLimit>0 ? Math.max(0,Math.min(100,(paid/totalLimit)*100)) : 0;
+
+  document.getElementById('totalProgressCard').innerHTML = `
+    <h2>Overall progress</h2>
+    <div class="flex-between text-sm mb-1">
+      <span>${fmtMoney(totalBalance)} remaining</span>
+      <span class="text-muted">${totalLimit>0?fmtMoney(totalLimit)+' total limit':''}</span>
+    </div>
+    <div class="bar-track" style="height:14px;border-radius:8px;">
+      <div class="bar-fill" style="width:${pct}%;background:var(--green);height:14px;border-radius:8px;"></div>
+    </div>
+    <div class="text-xs text-muted mt-4">${totalLimit>0?Math.round(pct)+'% of total credit used':'Enter credit limits on each account to see utilization'}</div>
+  `;
+}
+
+// ── Debt cards ─────────────────────────────────────────────────
+function renderDebtCards() {
+  const el = document.getElementById('debtGrid');
+  if (db.debts.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">No debt accounts yet. Add your first one.</div>';
+    return;
+  }
+
+  el.innerHTML = db.debts.map(d => {
+    const util = d.limit>0 ? Math.min(100,Math.round((d.balance/d.limit)*100)) : null;
+    const paidPct = d.limit>0 ? Math.max(0,Math.min(100,Math.round(((d.limit-d.balance)/d.limit)*100))) : 0;
+    return `<div class="debt-card" style="border-left-color:${d.color};">
+      <div class="flex-between">
+        <div class="debt-name">${escHtml(d.label)}</div>
+        <button class="btn sm icon-btn" data-edit-debt="${d.id}">✎</button>
+      </div>
+      <div class="debt-balance" style="color:${d.color};">${fmtMoney(d.balance)}</div>
+      <div class="payoff-bar">
+        <div class="bar-track">
+          <div class="bar-fill" style="width:${paidPct}%;background:${d.color};"></div>
+        </div>
+      </div>
+      <div class="debt-meta" style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:6px;">
+        ${d.limit>0 ? `<span>Limit: ${fmtMoney(d.limit)}</span><span>Util: ${util}%</span>` : '<span></span><span></span>'}
+        ${d.minPayment>0 ? `<span>Min pmt: ${fmtMoney(d.minPayment)}/mo</span>` : '<span></span>'}
+        ${d.apr>0 ? `<span>APR: ${d.apr}%</span>` : '<span></span>'}
+        ${d.dueDay ? `<span>Due: day ${d.dueDay}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  el.querySelectorAll('[data-edit-debt]').forEach(btn => openDebtModal(btn.dataset.editDebt, true));
+  el.querySelectorAll('[data-edit-debt]').forEach(btn => {
+    btn.addEventListener('click', () => openDebtModal(btn.dataset.editDebt, true));
+  });
+}
+
+// ── Strategy ───────────────────────────────────────────────────
+document.getElementById('tabSnowball').addEventListener('click', () => { activeStrategy='snowball'; renderStrategy(); updateStrategyTabs(); });
+document.getElementById('tabAvalanche').addEventListener('click', () => { activeStrategy='avalanche'; renderStrategy(); updateStrategyTabs(); });
+
+function updateStrategyTabs() {
+  document.getElementById('tabSnowball').className = 'inner-tab' + (activeStrategy==='snowball'?' active':'');
+  document.getElementById('tabAvalanche').className = 'inner-tab' + (activeStrategy==='avalanche'?' active':'');
+}
+
+function renderStrategy() {
+  const debts = db.debts.filter(d=>d.balance>0);
+  if (debts.length === 0) {
+    document.getElementById('strategyDesc').textContent = 'Enter your balances to see a payoff strategy.';
+    document.getElementById('strategyList').innerHTML = '';
+    return;
+  }
+
+  let sorted;
+  if (activeStrategy === 'snowball') {
+    sorted = [...debts].sort((a,b)=>a.balance-b.balance);
+    document.getElementById('strategyDesc').textContent = 'Snowball: pay minimums on everything, throw extra at the smallest balance first. Builds momentum and motivation.';
+  } else {
+    sorted = [...debts].sort((a,b)=>b.apr-a.apr);
+    document.getElementById('strategyDesc').textContent = 'Avalanche: pay minimums on everything, throw extra at the highest APR first. Saves the most money in interest.';
+  }
+
+  document.getElementById('strategyList').innerHTML = sorted.map((d,i) => `
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--tan-dark);">
+      <div style="width:24px;height:24px;border-radius:50%;background:${d.color};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.78rem;font-weight:700;flex-shrink:0;">${i+1}</div>
+      <div style="flex:1;">
+        <div style="font-weight:600;font-size:.9rem;">${escHtml(d.label)}</div>
+        <div class="text-xs text-muted">${fmtMoney(d.balance)} · ${d.apr>0?d.apr+'% APR':'no APR entered'} · min ${fmtMoney(d.minPayment)}/mo</div>
+      </div>
+      ${i===0 ? '<span style="font-size:.72rem;background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber);border-radius:999px;padding:2px 8px;white-space:nowrap;">Focus here</span>' : ''}
+    </div>
+  `).join('');
+}
+
+document.getElementById('calcPayoffBtn').addEventListener('click', () => {
+  const extra = parseFloat(document.getElementById('extraPayment').value) || 0;
+  const debts = db.debts.filter(d=>d.balance>0);
+  if (debts.length === 0) return;
+
+  const totalMin = debts.reduce((s,d)=>s+(d.minPayment||0),0);
+  const totalPayment = totalMin + extra;
+
+  // Very rough estimate: assume average weighted APR
+  const totalBalance = debts.reduce((s,d)=>s+d.balance,0);
+  const weightedApr = debts.reduce((s,d)=>s+(d.apr||18)*(d.balance/totalBalance),0);
+  const monthlyRate = (weightedApr/100)/12;
+
+  let months = 0;
+  if (monthlyRate > 0 && totalPayment > totalBalance*monthlyRate) {
+    months = Math.ceil(Math.log(totalPayment/(totalPayment-totalBalance*monthlyRate)) / Math.log(1+monthlyRate));
+  } else if (monthlyRate === 0) {
+    months = Math.ceil(totalBalance / totalPayment);
+  }
+
+  const years = Math.floor(months/12);
+  const mos = months % 12;
+  const timeStr = years > 0 ? `${years}y ${mos}m` : `${mos} months`;
+  const totalPaid = totalPayment * months;
+  const totalInterest = totalPaid - totalBalance;
+
+  document.getElementById('payoffEstimate').innerHTML = `
+    <div style="background:var(--tan);border-radius:8px;padding:14px 16px;font-size:.88rem;">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+        <div><div class="text-xs text-muted">Est. payoff</div><div class="bold">${timeStr}</div></div>
+        <div><div class="text-xs text-muted">Monthly payment</div><div class="bold">${fmtMoney(totalPayment)}</div></div>
+        <div><div class="text-xs text-muted">Est. total interest</div><div class="bold red">${fmtMoney(totalInterest)}</div></div>
+      </div>
+      <div class="text-xs text-muted italic mt-4">Rough estimate based on weighted avg APR. Actual varies by account.</div>
+    </div>
+  `;
+});
+
+// ── Debt modal ─────────────────────────────────────────────────
+document.getElementById('addDebtBtn').addEventListener('click', () => openDebtModal(null, false));
+
+function openDebtModal(id, editMode) {
+  editingDebtId = id;
+  const modal = document.getElementById('debtModal');
+  const deleteBtn = document.getElementById('debtDeleteBtn');
+
+  if (editMode && id) {
+    const d = db.debts.find(x=>x.id===id);
+    document.getElementById('debtModalTitle').textContent = 'Edit Account';
+    document.getElementById('dLabel').value = d.label;
+    document.getElementById('dBalance').value = d.balance || '';
+    document.getElementById('dLimit').value = d.limit || '';
+    document.getElementById('dMin').value = d.minPayment || '';
+    document.getElementById('dApr').value = d.apr || '';
+    document.getElementById('dDueDay').value = d.dueDay || '';
+    document.getElementById('dColor').value = d.color || '#5C8A6E';
+    document.getElementById('debtId').value = id;
+    deleteBtn.style.display = 'inline-flex';
+  } else {
+    document.getElementById('debtModalTitle').textContent = 'Add Debt Account';
+    ['dLabel','dBalance','dLimit','dMin','dApr','dDueDay'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('dColor').value = '#5C8A6E';
+    document.getElementById('debtId').value = '';
+    deleteBtn.style.display = 'none';
+  }
+  modal.classList.add('show');
+}
+
+document.getElementById('debtCancelBtn').addEventListener('click', () => document.getElementById('debtModal').classList.remove('show'));
+document.getElementById('debtModal').addEventListener('click', e => { if (e.target===document.getElementById('debtModal')) document.getElementById('debtModal').classList.remove('show'); });
+
+document.getElementById('debtSaveBtn').addEventListener('click', () => {
+  const id = document.getElementById('debtId').value;
+  const data = {
+    label: document.getElementById('dLabel').value.trim() || 'Unnamed account',
+    balance: parseFloat(document.getElementById('dBalance').value)||0,
+    limit: parseFloat(document.getElementById('dLimit').value)||0,
+    minPayment: parseFloat(document.getElementById('dMin').value)||0,
+    apr: parseFloat(document.getElementById('dApr').value)||0,
+    dueDay: parseInt(document.getElementById('dDueDay').value)||1,
+    color: document.getElementById('dColor').value,
+  };
+
+  if (id) {
+    const d = db.debts.find(x=>x.id===id);
+    Object.assign(d, data);
+  } else {
+    db.debts.push({ id: uid(), ...data });
+  }
+  saveData(db);
+  document.getElementById('debtModal').classList.remove('show');
+  renderAll();
+});
+
+document.getElementById('debtDeleteBtn').addEventListener('click', () => {
+  const id = document.getElementById('debtId').value;
+  if (!confirm('Remove this debt account?')) return;
+  db.debts = db.debts.filter(d=>d.id!==id);
+  saveData(db);
+  document.getElementById('debtModal').classList.remove('show');
+  renderAll();
+});
+
+document.getElementById('exportBtn').addEventListener('click', () => exportData(db));
+
+function escHtml(s) { const d=document.createElement('div');d.textContent=s||'';return d.innerHTML; }
+
+function renderAll() {
+  renderTiles();
+  renderTotalProgress();
+  renderDebtCards();
+  renderStrategy();
+  updateStrategyTabs();
+}
+
+buildMonthOptions();
+renderAll();
+</script>
+</body>
+</html>

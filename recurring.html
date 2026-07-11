@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Ledger — Recurring Bills</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <span class="brand-name">Home Ledger</span>
+    <span class="brand-sub">household finances</span>
+  </div>
+  <div class="sidebar-month">
+    <div style="color:rgba(255,255,255,.5); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px;">Viewing month</div>
+    <select id="globalMonthPicker"></select>
+  </div>
+  <nav>
+    <a href="index.html" class="nav-link"><span class="nav-icon">◈</span> Dashboard</a>
+    <a href="transactions.html" class="nav-link"><span class="nav-icon">↕</span> Transactions</a>
+    <a href="budget.html" class="nav-link"><span class="nav-icon">◫</span> Budget</a>
+    <a href="debts.html" class="nav-link"><span class="nav-icon">↓</span> Debts</a>
+    <a href="recurring.html" class="nav-link active"><span class="nav-icon">↻</span> Recurring Bills</a>
+  </nav>
+  <div class="sidebar-footer">
+    <button id="exportBtn">⬇ Export backup</button>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="page-header">
+    <div><h1>Recurring Bills</h1><div class="page-sub">Subscriptions, utilities, and fixed expenses</div></div>
+    <button class="btn primary" id="addRecurringBtn">+ Add bill</button>
+  </div>
+
+  <!-- Summary tiles -->
+  <div class="grid-3 section-gap" id="recurringTiles"></div>
+
+  <!-- Calendar view — due dates this month -->
+  <div class="card section-gap">
+    <h2>Due this month</h2>
+    <div id="dueSoon"></div>
+  </div>
+
+  <!-- All recurring bills -->
+  <div class="card section-gap">
+    <div class="flex-between" style="margin-bottom:14px;">
+      <h2 style="margin:0;">All bills <span class="card-count" id="billCount">0</span></h2>
+      <div class="flex gap-8">
+        <button class="btn sm" id="filterActiveBtn" style="font-weight:600;">Active</button>
+        <button class="btn sm" id="filterAllBtn">Show all</button>
+      </div>
+    </div>
+    <div id="recurringList"></div>
+  </div>
+
+  <!-- Log bill as paid -->
+  <div class="card section-gap">
+    <h2>Quick-log a payment</h2>
+    <p class="text-sm text-muted italic" style="margin:0 0 14px;">Mark a recurring bill as paid this month — logs it as a transaction automatically.</p>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+      <div class="field" style="margin:0; min-width:200px;">
+        <label>Bill</label>
+        <select id="logBillSelect"></select>
+      </div>
+      <div class="field" style="margin:0;">
+        <label>Date paid</label>
+        <input type="date" id="logDate">
+      </div>
+      <div class="field" style="margin:0;">
+        <label>Amount (if different)</label>
+        <input type="number" id="logAmount" min="0" step="0.01" placeholder="Uses bill amount">
+      </div>
+      <button class="btn primary" id="logPaymentBtn">Log payment</button>
+    </div>
+    <div id="logFeedback" style="margin-top:10px;font-size:.85rem;color:var(--green);display:none;">✓ Payment logged as transaction.</div>
+  </div>
+
+</main>
+
+<!-- Add/Edit modal -->
+<div class="modal-overlay" id="recurringModal">
+  <div class="modal">
+    <h2 id="recurringModalTitle">Add Recurring Bill</h2>
+    <input type="hidden" id="recurringId">
+    <div class="form-grid">
+      <div class="field" style="grid-column:1/-1;">
+        <label>Bill name</label>
+        <input type="text" id="rLabel" placeholder="e.g. Electric, Netflix, Car Insurance">
+      </div>
+      <div class="field">
+        <label>Amount ($/mo)</label>
+        <input type="number" id="rAmount" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="field">
+        <label>Due day of month</label>
+        <input type="number" id="rDueDay" min="1" max="31" placeholder="e.g. 15">
+      </div>
+      <div class="field">
+        <label>Category</label>
+        <select id="rCategory"></select>
+      </div>
+      <div class="field">
+        <label>Account used</label>
+        <select id="rAccount"></select>
+      </div>
+    </div>
+    <div class="field mt-8">
+      <label>Notes</label>
+      <input type="text" id="rNote" placeholder="e.g. auto-pay on Chase Freedom">
+    </div>
+    <div class="field mt-8 toggle-row" style="display:flex;align-items:center;gap:8px;">
+      <input type="checkbox" id="rActive" checked style="width:16px;height:16px;accent-color:var(--green);">
+      <label for="rActive" style="font-size:.9rem;">Active (uncheck to pause without deleting)</label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn danger" id="recurringDeleteBtn" style="display:none;">Delete</button>
+      <button class="btn" id="recurringCancelBtn">Cancel</button>
+      <button class="btn primary" id="recurringSaveBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script>
+const db = loadData();
+let showOnlyActive = true;
+let editingId = null;
+
+function buildMonthOptions() {
+  const picker = document.getElementById('globalMonthPicker');
+  const now = new Date();
+  const months = [];
+  for (let i=-3; i<=3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    months.push(d.toISOString().slice(0,7));
+  }
+  picker.innerHTML = months.map(m=>`<option value="${m}" ${m===currentMonthKey()?'selected':''}>${monthLabel(m)}</option>`).join('');
+}
+
+function populateSelects() {
+  const catSel = document.getElementById('rCategory');
+  catSel.innerHTML = CATEGORIES.map(c=>`<option value="${c.id}">${c.icon} ${c.label}</option>`).join('');
+  const accSel = document.getElementById('rAccount');
+  accSel.innerHTML = db.accounts.map(a=>`<option value="${a.id}">${a.label}</option>`).join('');
+}
+
+// ── Tiles ──────────────────────────────────────────────────────
+function renderTiles() {
+  const active = db.recurring.filter(r=>r.active!==false);
+  const totalMonthly = active.reduce((s,r)=>s+r.amount,0);
+  const today = new Date().getDate();
+  const overdue = active.filter(r=>r.dueDay < today).length;
+  const dueSoon = active.filter(r=>{ const d=r.dueDay-today; return d>=0 && d<=7; }).length;
+
+  document.getElementById('recurringTiles').innerHTML = `
+    <div class="stat-tile negative">
+      <div class="label">Monthly committed</div>
+      <div class="value">${fmtMoney(totalMonthly)}</div>
+      <div class="sub">${active.length} active bills</div>
+    </div>
+    <div class="stat-tile ${overdue>0?'negative':''}">
+      <div class="label">Past due this month</div>
+      <div class="value">${overdue}</div>
+      <div class="sub">${overdue>0?'check these!':'all clear'}</div>
+    </div>
+    <div class="stat-tile ${dueSoon>0?'warning':''}">
+      <div class="label">Due in 7 days</div>
+      <div class="value">${dueSoon}</div>
+      <div class="sub">${fmtMoney(active.filter(r=>{const d=r.dueDay-today;return d>=0&&d<=7;}).reduce((s,r)=>s+r.amount,0))} coming up</div>
+    </div>
+  `;
+}
+
+// ── Due this month ─────────────────────────────────────────────
+function renderDueSoon() {
+  const today = new Date().getDate();
+  const active = db.recurring.filter(r=>r.active!==false);
+  const sorted = active.map(r=>({...r,daysUntil:r.dueDay-today}))
+    .sort((a,b)=>a.daysUntil-b.daysUntil);
+
+  if (sorted.length===0) {
+    document.getElementById('dueSoon').innerHTML='<div class="empty-state">No active bills. Add some above.</div>';
+    return;
+  }
+
+  document.getElementById('dueSoon').innerHTML = `
+    <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px;">
+      ${sorted.map(r=>{
+        const past = r.daysUntil < 0;
+        const urgent = !past && r.daysUntil <= 5;
+        const cls = past?'overdue':urgent?'soon':'ok';
+        const lbl = past?`${Math.abs(r.daysUntil)}d ago`:r.daysUntil===0?'Today':r.daysUntil===1?'Tomorrow':`Day ${r.dueDay}`;
+        const cat = categoryById(r.category);
+        return `<div style="background:var(--tan);border-radius:8px;padding:12px;border-left:3px solid ${cat.color};">
+          <div style="font-weight:600;font-size:.9rem;margin-bottom:2px;">${escHtml(r.label)}</div>
+          <div style="font-size:.82rem;color:var(--ink-light);">${fmtMoney(r.amount)}</div>
+          <div style="margin-top:6px;"><span class="due-badge ${cls}">${lbl}</span></div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+// ── Bill list ──────────────────────────────────────────────────
+function renderList() {
+  const bills = showOnlyActive
+    ? db.recurring.filter(r=>r.active!==false)
+    : db.recurring;
+
+  document.getElementById('billCount').textContent = db.recurring.length;
+
+  if (bills.length===0) {
+    document.getElementById('recurringList').innerHTML='<div class="empty-state">No bills here yet.</div>';
+    return;
+  }
+
+  // Build log-bill select
+  document.getElementById('logBillSelect').innerHTML =
+    db.recurring.filter(r=>r.active!==false).map(r=>`<option value="${r.id}">${r.label} (${fmtMoney(r.amount)})</option>`).join('');
+
+  const today = new Date().getDate();
+  document.getElementById('recurringList').innerHTML = `
+    <table class="data-table">
+      <thead><tr>
+        <th>Bill</th><th>Amount</th><th>Due day</th><th>Category</th><th>Account</th><th>Status</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${bills.sort((a,b)=>a.dueDay-b.dueDay).map(r=>{
+          const cat = categoryById(r.category);
+          const acct = db.accounts.find(a=>a.id===r.account);
+          const days = r.dueDay - today;
+          const statusCls = !r.active?'':'';
+          return `<tr style="${!r.active?'opacity:.5;':''}">
+            <td><strong>${escHtml(r.label)}</strong>${r.note?`<div class="text-xs text-muted">${escHtml(r.note)}</div>`:''}
+            </td>
+            <td class="bold">${fmtMoney(r.amount)}</td>
+            <td class="text-muted">Day ${r.dueDay}</td>
+            <td><span class="cat-chip" style="background:${cat.color}">${cat.icon} ${cat.label}</span></td>
+            <td class="text-sm text-muted">${acct?.label||'—'}</td>
+            <td>
+              ${r.active===false
+                ? '<span class="due-badge" style="background:var(--tan);border-color:var(--border);color:var(--ink-light);">Paused</span>'
+                : days<0
+                  ? '<span class="due-badge overdue">Past due</span>'
+                  : days<=5
+                    ? `<span class="due-badge soon">${days===0?'Today':days+'d'}</span>`
+                    : '<span class="due-badge ok">On track</span>'
+              }
+            </td>
+            <td><button class="btn sm icon-btn" data-edit-recurring="${r.id}">✎</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  document.querySelectorAll('[data-edit-recurring]').forEach(btn=>{
+    btn.addEventListener('click',()=>openModal(btn.dataset.editRecurring));
+  });
+}
+
+// ── Log payment ────────────────────────────────────────────────
+document.getElementById('logDate').value = todayISO();
+document.getElementById('logPaymentBtn').addEventListener('click', ()=>{
+  const billId = document.getElementById('logBillSelect').value;
+  const bill = db.recurring.find(r=>r.id===billId);
+  if (!bill) return;
+  const amount = parseFloat(document.getElementById('logAmount').value) || bill.amount;
+  const date = document.getElementById('logDate').value || todayISO();
+  db.transactions.push({
+    id: uid(), date, amount, type:'expense',
+    category: bill.category,
+    account: bill.account,
+    note: bill.label + ' (recurring)',
+    receiptB64: null,
+  });
+  saveData(db);
+  const fb = document.getElementById('logFeedback');
+  fb.style.display='block';
+  setTimeout(()=>fb.style.display='none', 3000);
+});
+
+// ── Filters ────────────────────────────────────────────────────
+document.getElementById('filterActiveBtn').addEventListener('click',()=>{
+  showOnlyActive=true;
+  document.getElementById('filterActiveBtn').style.fontWeight='600';
+  document.getElementById('filterAllBtn').style.fontWeight='';
+  renderList();
+});
+document.getElementById('filterAllBtn').addEventListener('click',()=>{
+  showOnlyActive=false;
+  document.getElementById('filterActiveBtn').style.fontWeight='';
+  document.getElementById('filterAllBtn').style.fontWeight='600';
+  renderList();
+});
+
+// ── Modal ──────────────────────────────────────────────────────
+document.getElementById('addRecurringBtn').addEventListener('click',()=>openModal(null));
+
+function openModal(id) {
+  editingId = id;
+  const modal = document.getElementById('recurringModal');
+  const deleteBtn = document.getElementById('recurringDeleteBtn');
+  populateSelects();
+
+  if (id) {
+    const r = db.recurring.find(x=>x.id===id);
+    document.getElementById('recurringModalTitle').textContent='Edit Bill';
+    document.getElementById('recurringId').value=id;
+    document.getElementById('rLabel').value=r.label;
+    document.getElementById('rAmount').value=r.amount;
+    document.getElementById('rDueDay').value=r.dueDay;
+    document.getElementById('rCategory').value=r.category;
+    document.getElementById('rAccount').value=r.account;
+    document.getElementById('rNote').value=r.note||'';
+    document.getElementById('rActive').checked=r.active!==false;
+    deleteBtn.style.display='inline-flex';
+  } else {
+    document.getElementById('recurringModalTitle').textContent='Add Recurring Bill';
+    document.getElementById('recurringId').value='';
+    ['rLabel','rAmount','rDueDay','rNote'].forEach(i=>document.getElementById(i).value='');
+    document.getElementById('rActive').checked=true;
+    deleteBtn.style.display='none';
+  }
+  modal.classList.add('show');
+}
+
+document.getElementById('recurringCancelBtn').addEventListener('click',()=>document.getElementById('recurringModal').classList.remove('show'));
+document.getElementById('recurringModal').addEventListener('click',e=>{
+  if(e.target===document.getElementById('recurringModal'))document.getElementById('recurringModal').classList.remove('show');
+});
+
+document.getElementById('recurringSaveBtn').addEventListener('click',()=>{
+  const id = document.getElementById('recurringId').value;
+  const data = {
+    label: document.getElementById('rLabel').value.trim()||'Unnamed bill',
+    amount: parseFloat(document.getElementById('rAmount').value)||0,
+    dueDay: parseInt(document.getElementById('rDueDay').value)||1,
+    category: document.getElementById('rCategory').value,
+    account: document.getElementById('rAccount').value,
+    note: document.getElementById('rNote').value.trim(),
+    active: document.getElementById('rActive').checked,
+  };
+  if (id) {
+    Object.assign(db.recurring.find(r=>r.id===id), data);
+  } else {
+    db.recurring.push({ id:uid(), ...data });
+  }
+  saveData(db);
+  document.getElementById('recurringModal').classList.remove('show');
+  renderAll();
+});
+
+document.getElementById('recurringDeleteBtn').addEventListener('click',()=>{
+  if(!confirm('Delete this bill?')) return;
+  db.recurring = db.recurring.filter(r=>r.id!==editingId);
+  saveData(db);
+  document.getElementById('recurringModal').classList.remove('show');
+  renderAll();
+});
+
+document.getElementById('exportBtn').addEventListener('click',()=>exportData(db));
+
+function escHtml(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
+
+function renderAll() {
+  renderTiles();
+  renderDueSoon();
+  renderList();
+}
+
+buildMonthOptions();
+renderAll();
+</script>
+</body>
+</html>

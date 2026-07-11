@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Ledger — Transactions</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <span class="brand-name">Home Ledger</span>
+    <span class="brand-sub">household finances</span>
+  </div>
+  <div class="sidebar-month">
+    <div style="color:rgba(255,255,255,.5); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px;">Viewing month</div>
+    <select id="globalMonthPicker"></select>
+  </div>
+  <nav>
+    <a href="index.html" class="nav-link"><span class="nav-icon">◈</span> Dashboard</a>
+    <a href="transactions.html" class="nav-link active"><span class="nav-icon">↕</span> Transactions</a>
+    <a href="budget.html" class="nav-link"><span class="nav-icon">◫</span> Budget</a>
+    <a href="debts.html" class="nav-link"><span class="nav-icon">↓</span> Debts</a>
+    <a href="recurring.html" class="nav-link"><span class="nav-icon">↻</span> Recurring Bills</a>
+  </nav>
+  <div class="sidebar-footer">
+    <button id="exportBtn">⬇ Export backup</button>
+    <button id="importBtn">⬆ Import backup</button>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+  </div>
+</aside>
+
+<main class="main">
+  <div class="page-header">
+    <div>
+      <h1>Transactions</h1>
+      <div class="page-sub" id="txSub"></div>
+    </div>
+    <button class="btn primary" id="openFormBtn">+ New transaction</button>
+  </div>
+
+  <!-- Quick entry card (shown by default on mobile, collapsible on desktop) -->
+  <div class="card section-gap" id="entryCard">
+    <div class="flex-between" style="margin-bottom:16px;">
+      <h2 style="margin:0;" id="formTitle">New Transaction</h2>
+      <button class="btn sm" id="collapseFormBtn">Hide form</button>
+    </div>
+
+    <!-- Expense / Income toggle -->
+    <div class="type-toggle" style="margin-bottom:16px;" id="typeToggle">
+      <button id="btnExpense" class="active-expense">− Expense</button>
+      <button id="btnIncome">+ Income</button>
+    </div>
+
+    <div id="expenseForm">
+      <div class="form-grid">
+        <div class="field">
+          <label>Date</label>
+          <input type="date" id="txDate">
+        </div>
+        <div class="field">
+          <label>Amount ($)</label>
+          <input type="number" id="txAmount" min="0" step="0.01" placeholder="0.00" inputmode="decimal">
+        </div>
+        <div class="field">
+          <label>Category</label>
+          <select id="txCategory"></select>
+        </div>
+        <div class="field">
+          <label>Account</label>
+          <select id="txAccount"></select>
+        </div>
+      </div>
+      <div class="field mt-8">
+        <label>Note / merchant</label>
+        <input type="text" id="txNote" placeholder="e.g. Walmart, Shell #4, Amazon">
+      </div>
+      <div class="field mt-8">
+        <label>Receipt photo <span style="font-style:italic; text-transform:none; letter-spacing:0;">(optional)</span></label>
+        <input type="file" id="txReceipt" accept="image/*" capture="environment">
+        <div class="field-hint">Photo is stored locally in your browser</div>
+        <img id="receiptPreview" class="receipt-preview mt-4" style="display:none;">
+      </div>
+    </div>
+
+    <div id="incomeForm" style="display:none;">
+      <div class="form-grid">
+        <div class="field">
+          <label>Date</label>
+          <input type="date" id="incDate">
+        </div>
+        <div class="field">
+          <label>Amount ($)</label>
+          <input type="number" id="incAmount" min="0" step="0.01" placeholder="0.00" inputmode="decimal">
+        </div>
+        <div class="field">
+          <label>Source</label>
+          <select id="incSource"></select>
+        </div>
+        <div class="field">
+          <label>Account received into</label>
+          <select id="incAccount"></select>
+        </div>
+      </div>
+      <div class="field mt-8">
+        <label>Note</label>
+        <input type="text" id="incNote" placeholder="e.g. eBay payout, paycheck week of...">
+      </div>
+    </div>
+
+    <div class="flex" style="gap:10px; margin-top:16px;">
+      <button class="btn primary" id="saveTransactionBtn">Save transaction</button>
+      <button class="btn" id="clearFormBtn">Clear</button>
+    </div>
+  </div>
+
+  <!-- Filter bar -->
+  <div class="card section-gap" style="padding:14px 18px;">
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+      <div class="field" style="margin:0; min-width:120px;">
+        <label>Filter type</label>
+        <select id="filterType">
+          <option value="all">All</option>
+          <option value="expense">Expenses</option>
+          <option value="income">Income</option>
+        </select>
+      </div>
+      <div class="field" style="margin:0; min-width:140px;">
+        <label>Category</label>
+        <select id="filterCat">
+          <option value="all">All categories</option>
+        </select>
+      </div>
+      <div class="field" style="margin:0; min-width:140px;">
+        <label>Account</label>
+        <select id="filterAccount">
+          <option value="all">All accounts</option>
+        </select>
+      </div>
+      <div class="field" style="margin:0; flex:1; min-width:140px;">
+        <label>Search</label>
+        <input type="text" id="filterSearch" placeholder="Search notes...">
+      </div>
+      <button class="btn sm" id="clearFiltersBtn">Clear filters</button>
+    </div>
+  </div>
+
+  <!-- Transaction list -->
+  <div class="card">
+    <div class="flex-between" style="margin-bottom:12px;">
+      <h2 style="margin:0;">Ledger <span class="card-count" id="txCount">0</span></h2>
+      <div class="text-sm text-muted" id="txTotals"></div>
+    </div>
+    <div id="txList"></div>
+  </div>
+</main>
+
+<!-- Edit modal -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <h2 id="editModalTitle">Edit Transaction</h2>
+    <input type="hidden" id="editId">
+    <input type="hidden" id="editType">
+    <div id="editFields"></div>
+    <div class="modal-actions">
+      <button class="btn danger" id="deleteBtn">Delete</button>
+      <button class="btn" id="editCancelBtn">Cancel</button>
+      <button class="btn primary" id="editSaveBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script>
+const db = loadData();
+let activeType = 'expense';
+let editingId = null;
+let editingType = null;
+let receiptB64 = null;
+
+// ── Populate selects ───────────────────────────────────────────
+function populateSelects() {
+  const catSel = document.getElementById('txCategory');
+  catSel.innerHTML = CATEGORIES.map(c => `<option value="${c.id}">${c.icon} ${c.label}</option>`).join('');
+
+  const incSrcSel = document.getElementById('incSource');
+  incSrcSel.innerHTML = INCOME_SOURCES.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
+
+  [document.getElementById('txAccount'), document.getElementById('incAccount')].forEach(sel => {
+    sel.innerHTML = db.accounts.map(a => `<option value="${a.id}">${a.label}</option>`).join('');
+  });
+
+  document.getElementById('filterCat').innerHTML =
+    '<option value="all">All categories</option>' +
+    CATEGORIES.map(c => `<option value="${c.id}">${c.label}</option>`).join('');
+
+  document.getElementById('filterAccount').innerHTML =
+    '<option value="all">All accounts</option>' +
+    db.accounts.map(a => `<option value="${a.id}">${a.label}</option>`).join('');
+}
+
+// ── Month picker ───────────────────────────────────────────────
+function buildMonthOptions() {
+  const picker = document.getElementById('globalMonthPicker');
+  const months = [];
+  const now = new Date();
+  for (let i = -3; i <= 18; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(d.toISOString().slice(0,7));
+  }
+  db.transactions.forEach(t => { if (!months.includes(monthKey(t.date))) months.push(monthKey(t.date)); });
+  db.income.forEach(i => { if (!months.includes(monthKey(i.date))) months.push(monthKey(i.date)); });
+  months.sort().reverse();
+  picker.innerHTML = months.map(m => `<option value="${m}" ${m===currentMonthKey()?'selected':''}>${monthLabel(m)}</option>`).join('');
+}
+
+function getViewMonth() { return document.getElementById('globalMonthPicker').value || currentMonthKey(); }
+document.getElementById('globalMonthPicker').addEventListener('change', renderTxList);
+
+// ── Type toggle ────────────────────────────────────────────────
+document.getElementById('btnExpense').addEventListener('click', () => setType('expense'));
+document.getElementById('btnIncome').addEventListener('click', () => setType('income'));
+
+function setType(t) {
+  activeType = t;
+  document.getElementById('btnExpense').className = t==='expense' ? 'active-expense' : '';
+  document.getElementById('btnIncome').className  = t==='income'  ? 'active-income'  : '';
+  document.getElementById('expenseForm').style.display = t==='expense' ? '' : 'none';
+  document.getElementById('incomeForm').style.display  = t==='income'  ? '' : 'none';
+  document.getElementById('formTitle').textContent = t==='expense' ? 'New Expense' : 'New Income';
+}
+
+// ── Receipt preview ────────────────────────────────────────────
+document.getElementById('txReceipt').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    receiptB64 = ev.target.result;
+    const img = document.getElementById('receiptPreview');
+    img.src = receiptB64;
+    img.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+});
+
+// ── Default date ───────────────────────────────────────────────
+function setDefaultDates() {
+  const today = todayISO();
+  document.getElementById('txDate').value = today;
+  document.getElementById('incDate').value = today;
+}
+
+// ── Save transaction ───────────────────────────────────────────
+document.getElementById('saveTransactionBtn').addEventListener('click', saveTransaction);
+
+function saveTransaction() {
+  if (activeType === 'expense') {
+    const amount = parseFloat(document.getElementById('txAmount').value);
+    if (!amount || amount <= 0) { alert('Enter a valid amount.'); return; }
+    const tx = {
+      id: uid(),
+      date: document.getElementById('txDate').value || todayISO(),
+      amount,
+      type: 'expense',
+      category: document.getElementById('txCategory').value,
+      account: document.getElementById('txAccount').value,
+      note: document.getElementById('txNote').value.trim(),
+      receiptB64: receiptB64 || null,
+    };
+    db.transactions.push(tx);
+  } else {
+    const amount = parseFloat(document.getElementById('incAmount').value);
+    if (!amount || amount <= 0) { alert('Enter a valid amount.'); return; }
+    const inc = {
+      id: uid(),
+      date: document.getElementById('incDate').value || todayISO(),
+      amount,
+      source: document.getElementById('incSource').value,
+      account: document.getElementById('incAccount').value,
+      note: document.getElementById('incNote').value.trim(),
+    };
+    db.income.push(inc);
+  }
+  saveData(db);
+  clearForm();
+  renderTxList();
+}
+
+function clearForm() {
+  document.getElementById('txAmount').value = '';
+  document.getElementById('txNote').value = '';
+  document.getElementById('txReceipt').value = '';
+  document.getElementById('incAmount').value = '';
+  document.getElementById('incNote').value = '';
+  document.getElementById('receiptPreview').style.display = 'none';
+  receiptB64 = null;
+  setDefaultDates();
+}
+
+document.getElementById('clearFormBtn').addEventListener('click', clearForm);
+
+// ── Form collapse ──────────────────────────────────────────────
+let formVisible = true;
+document.getElementById('collapseFormBtn').addEventListener('click', () => {
+  formVisible = !formVisible;
+  document.getElementById('entryCard').style.display = formVisible ? '' : 'none';
+  document.getElementById('openFormBtn').style.display = formVisible ? 'none' : '';
+});
+document.getElementById('openFormBtn').addEventListener('click', () => {
+  formVisible = true;
+  document.getElementById('entryCard').style.display = '';
+  document.getElementById('openFormBtn').style.display = 'none';
+});
+document.getElementById('openFormBtn').style.display = 'none';
+
+// ── Render list ────────────────────────────────────────────────
+function renderTxList() {
+  const mk = getViewMonth();
+  const filterType = document.getElementById('filterType').value;
+  const filterCat = document.getElementById('filterCat').value;
+  const filterAcc = document.getElementById('filterAccount').value;
+  const search = document.getElementById('filterSearch').value.toLowerCase().trim();
+
+  // combine transactions + income into one list
+  let rows = [
+    ...getMonthTransactions(db, mk).map(t => ({ ...t, _kind:'tx' })),
+    ...getMonthIncome(db, mk).map(i => ({ ...i, type:'income', _kind:'inc', category:'income' })),
+  ];
+
+  if (filterType !== 'all') rows = rows.filter(r => r.type === filterType);
+  if (filterCat !== 'all') rows = rows.filter(r => r.category === filterCat);
+  if (filterAcc !== 'all') rows = rows.filter(r => r.account === filterAcc);
+  if (search) rows = rows.filter(r => (r.note||'').toLowerCase().includes(search) || (r.source||'').toLowerCase().includes(search));
+
+  rows.sort((a,b) => b.date.localeCompare(a.date));
+
+  const totalExp = rows.filter(r=>r.type==='expense').reduce((s,r)=>s+r.amount,0);
+  const totalInc = rows.filter(r=>r.type==='income').reduce((s,r)=>s+r.amount,0);
+
+  document.getElementById('txCount').textContent = rows.length;
+  document.getElementById('txSub').textContent = monthLabel(mk);
+  document.getElementById('txTotals').innerHTML =
+    `<span class="red">−${fmtMoney(totalExp)}</span>` +
+    (totalInc>0 ? ` · <span class="green">+${fmtMoney(totalInc)}</span>` : '');
+
+  const el = document.getElementById('txList');
+  if (rows.length === 0) {
+    el.innerHTML = '<div class="empty-state">No transactions match your filters.</div>';
+    return;
+  }
+
+  el.innerHTML = `<table class="data-table">
+    <thead><tr>
+      <th>Date</th><th>Note</th><th>Category / Source</th><th>Account</th><th class="text-right">Amount</th><th></th>
+    </tr></thead>
+    <tbody>
+    ${rows.map(r => {
+      const isIncome = r.type === 'income';
+      const cat = isIncome
+        ? { label: INCOME_SOURCES.find(s=>s.id===r.source)?.label || r.source, color:'var(--green)', icon:'↑' }
+        : categoryById(r.category);
+      const acct = db.accounts.find(a=>a.id===r.account);
+      return `<tr>
+        <td class="text-muted text-sm">${fmtDate(r.date)}</td>
+        <td>
+          ${escHtml(r.note||r.source||'—')}
+          ${r.receiptB64 ? `<img src="${r.receiptB64}" class="receipt-preview" style="width:28px;height:28px;margin-left:6px;vertical-align:middle;" onclick="showReceipt('${r.id}')">` : ''}
+        </td>
+        <td><span class="cat-chip" style="background:${cat.color}">${cat.icon} ${cat.label}</span></td>
+        <td class="text-sm text-muted">${acct?.label||'—'}</td>
+        <td class="text-right ${isIncome?'amount-income':'amount-expense'}">${isIncome?'+':'−'}${fmtMoney(r.amount)}</td>
+        <td><button class="btn sm icon-btn" data-edit-id="${r.id}" data-edit-kind="${r._kind}">✎</button></td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
+
+  el.querySelectorAll('[data-edit-id]').forEach(btn => {
+    btn.addEventListener('click', () => openEditModal(btn.dataset.editId, btn.dataset.editKind));
+  });
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' });
+}
+function escHtml(s) { const d=document.createElement('div');d.textContent=s||'';return d.innerHTML; }
+
+// ── Filters ────────────────────────────────────────────────────
+['filterType','filterCat','filterAccount','filterSearch'].forEach(id => {
+  document.getElementById(id).addEventListener('input', renderTxList);
+  document.getElementById(id).addEventListener('change', renderTxList);
+});
+document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+  document.getElementById('filterType').value = 'all';
+  document.getElementById('filterCat').value = 'all';
+  document.getElementById('filterAccount').value = 'all';
+  document.getElementById('filterSearch').value = '';
+  renderTxList();
+});
+
+// ── Edit modal ─────────────────────────────────────────────────
+function openEditModal(id, kind) {
+  editingId = id;
+  editingType = kind;
+  const overlay = document.getElementById('editModal');
+
+  let item;
+  if (kind === 'tx') {
+    item = db.transactions.find(t=>t.id===id);
+    document.getElementById('editModalTitle').textContent = 'Edit Expense';
+    document.getElementById('editFields').innerHTML = `
+      <div class="form-grid">
+        <div class="field"><label>Date</label><input type="date" id="ed_date" value="${item.date}"></div>
+        <div class="field"><label>Amount</label><input type="number" id="ed_amount" value="${item.amount}" step="0.01"></div>
+        <div class="field"><label>Category</label>
+          <select id="ed_cat">${CATEGORIES.map(c=>`<option value="${c.id}" ${c.id===item.category?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Account</label>
+          <select id="ed_acc">${db.accounts.map(a=>`<option value="${a.id}" ${a.id===item.account?'selected':''}>${a.label}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="field mt-8"><label>Note</label><input type="text" id="ed_note" value="${escHtml(item.note||'')}"></div>
+      ${item.receiptB64 ? `<img src="${item.receiptB64}" style="max-width:200px;border-radius:8px;margin-top:12px;">` : ''}
+    `;
+  } else {
+    item = db.income.find(i=>i.id===id);
+    document.getElementById('editModalTitle').textContent = 'Edit Income';
+    document.getElementById('editFields').innerHTML = `
+      <div class="form-grid">
+        <div class="field"><label>Date</label><input type="date" id="ed_date" value="${item.date}"></div>
+        <div class="field"><label>Amount</label><input type="number" id="ed_amount" value="${item.amount}" step="0.01"></div>
+        <div class="field"><label>Source</label>
+          <select id="ed_cat">${INCOME_SOURCES.map(s=>`<option value="${s.id}" ${s.id===item.source?'selected':''}>${s.label}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Account</label>
+          <select id="ed_acc">${db.accounts.map(a=>`<option value="${a.id}" ${a.id===item.account?'selected':''}>${a.label}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="field mt-8"><label>Note</label><input type="text" id="ed_note" value="${escHtml(item.note||'')}"></div>
+    `;
+  }
+  overlay.classList.add('show');
+}
+
+document.getElementById('editCancelBtn').addEventListener('click', () => {
+  document.getElementById('editModal').classList.remove('show');
+});
+document.getElementById('editModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('editModal'))
+    document.getElementById('editModal').classList.remove('show');
+});
+
+document.getElementById('editSaveBtn').addEventListener('click', () => {
+  const amount = parseFloat(document.getElementById('ed_amount').value);
+  if (!amount) return;
+  if (editingType === 'tx') {
+    const tx = db.transactions.find(t=>t.id===editingId);
+    tx.date = document.getElementById('ed_date').value;
+    tx.amount = amount;
+    tx.category = document.getElementById('ed_cat').value;
+    tx.account = document.getElementById('ed_acc').value;
+    tx.note = document.getElementById('ed_note').value;
+  } else {
+    const inc = db.income.find(i=>i.id===editingId);
+    inc.date = document.getElementById('ed_date').value;
+    inc.amount = amount;
+    inc.source = document.getElementById('ed_cat').value;
+    inc.account = document.getElementById('ed_acc').value;
+    inc.note = document.getElementById('ed_note').value;
+  }
+  saveData(db);
+  document.getElementById('editModal').classList.remove('show');
+  renderTxList();
+});
+
+document.getElementById('deleteBtn').addEventListener('click', () => {
+  if (!confirm('Delete this transaction?')) return;
+  if (editingType === 'tx') db.transactions = db.transactions.filter(t=>t.id!==editingId);
+  else db.income = db.income.filter(i=>i.id!==editingId);
+  saveData(db);
+  document.getElementById('editModal').classList.remove('show');
+  renderTxList();
+});
+
+function showReceipt(id) {
+  const tx = db.transactions.find(t=>t.id===id);
+  if (!tx?.receiptB64) return;
+  window.open(tx.receiptB64, '_blank');
+}
+
+// ── Export / import ────────────────────────────────────────────
+document.getElementById('exportBtn').addEventListener('click', () => exportData(db));
+document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
+document.getElementById('importFile').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => {
+    try { Object.assign(db, JSON.parse(ev.target.result)); saveData(db); renderTxList(); }
+    catch { alert('Could not read backup file.'); }
+  };
+  r.readAsText(f); e.target.value = '';
+});
+
+// ── Init ───────────────────────────────────────────────────────
+buildMonthOptions();
+populateSelects();
+setDefaultDates();
+setType('expense');
+renderTxList();
+
+// Auto-open new form if URL has #new
+if (location.hash === '#new') {
+  document.getElementById('openFormBtn').click();
+}
+</script>
+</body>
+</html>
